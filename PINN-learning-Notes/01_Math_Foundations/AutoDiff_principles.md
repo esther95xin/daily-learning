@@ -78,5 +78,17 @@ $$\frac{\partial u}{\partial t} = \alpha \frac{\partial^2 u}{\partial x^2}$$
 
 在 PyTorch 里，我们用 `torch.autograd.grad` 来手动求导。你经常会看到这行代码：
 
-```python
-u_x = torch.autograd.grad(u, x, create_graph=True)[0]
+    u_x = torch.autograd.grad(u, x, create_graph=True)[0]
+
+**为什么要加 `create_graph=True`？**
+
+这就像是你在玩“阅后即焚”。
+默认情况下，PyTorch 为了省内存，算完一次导数（得到 `u_x`）后，就会把刚才那张计算图撕了。
+
+但在 PINN 里，我们算完一阶导 `u_x` 往往还没完：
+1.  物理方程里可能有二阶导（$\frac{\partial^2 u}{\partial x^2}$），这意味着我们要对 `u_x` **再求一次导**。
+2.  这个导数最终要放进 Loss 里，去更新网络的权重。
+
+如果你不加 `create_graph=True`，等你回头想算二阶导或者反向传播更新权重时，PyTorch 会告诉你：“**不好意思，刚才那张地图我已经扔了，路断了。**”
+
+所以，只要涉及高阶导数或者要把导数放进 Loss，**千万别忘了告诉 PyTorch 把图留着！**
