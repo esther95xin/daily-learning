@@ -1,4 +1,6 @@
-### 第一步：PINN 到底特别在哪？（为什么要算那么多导数？）
+# 前置知识快速进入脑子
+
+## 第一步：PINN 到底特别在哪？（为什么要算那么多导数？）
 
 你可能已经熟悉了普通的神经网络（比如识别猫和狗），它们其实挺“单纯”的：只要最终输出的结果跟标签对得上就行。这时候，我们算导数唯一的目的，就是为了调整那一堆权重参数（Weights），让网络下次猜得更准。
 
@@ -16,7 +18,7 @@ $$\frac{\partial u}{\partial t} = \alpha \frac{\partial^2 u}{\partial x^2}$$
 
 ---
 
-### 第二步：为什么非得是自动微分（AD）？
+## 第二步：为什么非得是自动微分（AD）？
 
 在算导数这件事上，历史上有三种流派，最后只有 AD 活下来成为了深度学习的标配。
 
@@ -33,7 +35,7 @@ $$\frac{\partial u}{\partial t} = \alpha \frac{\partial^2 u}{\partial x^2}$$
 
 ---
 
-### 第三步：拆解黑盒子 —— 所谓的“计算图”
+## 第三步：拆解黑盒子 —— 所谓的“计算图”
 
 计算机其实很笨，看不懂复杂的数学式子。自动微分的秘诀就是画图 —— **计算图**。
 
@@ -52,7 +54,7 @@ $$\frac{\partial u}{\partial t} = \alpha \frac{\partial^2 u}{\partial x^2}$$
 
 ---
 
-### 第四步：前向还是反向？这是个效率问题
+## 第四步：前向还是反向？这是个效率问题
 
 在图上算导数，你可以从头往后算，也可以从后往前算。
 
@@ -72,7 +74,7 @@ $$\frac{\partial u}{\partial t} = \alpha \frac{\partial^2 u}{\partial x^2}$$
 
 ---
 
-### 第五步：代码里的深坑 —— `create_graph=True`
+## 第五步：代码里的深坑 —— `create_graph=True`
 
 最后讲个实战中最容易翻车的点。
 
@@ -92,3 +94,50 @@ $$\frac{\partial u}{\partial t} = \alpha \frac{\partial^2 u}{\partial x^2}$$
 如果你不加 `create_graph=True`，等你回头想算二阶导或者反向传播更新权重时，PyTorch 会告诉你：“**不好意思，刚才那张地图我已经扔了，路断了。**”
 
 所以，只要涉及高阶导数或者要把导数放进 Loss，**千万别忘了告诉 PyTorch 把图留着！**
+
+
+# 自动微分（AD）
+
+## 核心概念
+自动微分利用链式法则（Chain Rule）在计算图上精确计算导数。与有限差分不同，AD 没有离散化误差，其精度仅受浮点数精度限制。
+
+## 在 PINN 中的应用
+PINN 利用 AD 计算神经网络输出 $u$ 关于时空坐标 $(x, t)$ 的导数，从而将物理方程（PDE）作为残差项（Residual）加入损失函数。
+
+## 数学表达
+对于复合函数 $y = f(g(x))$，AD 计算：
+$$\frac{dy}{dx} = f'(g(x)) \cdot g'(x)$$
+
+## Python Implementation (PyTorch)
+关键点：使用 `torch.autograd.grad` 而非简单的 `backward()`，因为我们需要显式获得对输入的导数。
+
+```python
+import torch
+
+# 1. 定义输入变量 (物理坐标)
+# requires_grad=True 告诉 PyTorch 这是一个需要追踪梯度的叶子节点
+x = torch.tensor([2.0], requires_grad=True)
+
+# 2. 模拟神经网络的前向传播
+# 假设网络拟合函数 u(x) = x^3
+u = x ** 3
+
+# 3. 一阶导数 (First-order derivative): du/dx
+# grad_outputs=torch.ones_like(u) 是链式法则的起始项
+# create_graph=True 是关键！它允许我们对生成的导数再次求导 (用于高阶导数)
+u_x = torch.autograd.grad(outputs=u, 
+                          inputs=x, 
+                          grad_outputs=torch.ones_like(u), 
+                          create_graph=True)[0]
+
+print(f"u(x) = x^3, at x=2")
+print(f"一阶导数 u_x (理论值 3x^2 = 12): {u_x.item()}")
+
+# 4. 二阶导数 (Second-order derivative): d^2u/dx^2
+# PINN 中常见的项，如热传导方程中的 u_xx
+u_xx = torch.autograd.grad(outputs=u_x, 
+                           inputs=x, 
+                           grad_outputs=torch.ones_like(u_x), 
+                           create_graph=True)[0]
+
+print(f"二阶导数 u_xx (理论值 6x = 12): {u_xx.item()}")
