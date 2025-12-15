@@ -1,50 +1,72 @@
-# PINN 基础 Loss 函数设计
+# PINN Math Foundations: Loss Function Formulation
 
-## 1. 原理公式
-PINN 的总 Loss 通常由两部分组成：方程残差 ($Loss_{PDE}$) 和 边界条件 ($Loss_{BC}$)。
+## 核心概念
+PINN 的损失函数将物理约束作为正则化项加入。
+Total Loss = Data Mismatch (Supervised) + PDE Residual (Unsupervised).
 
-$$
-Loss = \lambda_{PDE} Loss_{PDE} + \lambda_{BC} Loss_{BC}
-$$
+## 场景
+求解 Burgers' Equation: $u_t + u u_x - \nu u_{xx} = 0$
+其中 $\nu = 0.01/\pi$.
 
-其中，$Loss_{PDE}$ 定义为：
-$$
-Loss_{PDE} = \frac{1}{N_f} \sum_{i=1}^{N_f} |f(x_f^i, t_f^i)|^2
-$$
+## Python Implementation (PyTorch)
 
-## 2. PyTorch 代码实现片段
-这是我常用的一个基础 Loss 计算模块：
-
-\`\`\`python
+```python
 import torch
+import torch.nn as nn
 
-def physics_informed_loss(model, x, t, u_true):
-    # 1. 开启梯度追踪
-    x.requires_grad = True
-    t.requires_grad = True
-    
-    # 2. 前向传播预测 u
-    u_pred = model(torch.cat([x, t], dim=1))
-    
-    # 3. 自动微分求导 (关键步骤!)
-    u_x = torch.autograd.grad(u_pred, x, grad_outputs=torch.ones_like(u_pred), create_graph=True)[0]
-    u_t = torch.autograd.grad(u_pred, t, grad_outputs=torch.ones_like(u_pred), create_graph=True)[0]
-    u_xx = torch.autograd.grad(u_x, x, grad_outputs=torch.ones_like(u_x), create_graph=True)[0]
-    
-    # 4. 定义 PDE 残差 (以热传导方程为例: u_t - u_xx = 0)
-    f_pred = u_t - u_xx 
-    
-    # 5. 计算 MSE Loss
-    loss_pde = torch.mean(f_pred ** 2)
-    loss_data = torch.mean((u_pred - u_true) ** 2)
-    
-    return loss_pde + loss_data
-\`\`\`
+class PINN_Loss_Example:
+    def __init__(self, model, nu=0.01/torch.pi):
+        self.model = model
+        self.nu = nu
+        self.loss_fn = nn.MSELoss()
 
-## 3. 常见坑点 (Debug) ⚠️
-* **二阶导数为0？**
-    * **原因**：很可能你用了 `ReLU` 激活函数。ReLU 的二阶导数恒为 0，无法用于 PINN。
-    * **解决**：必须换成 `Tanh`, `Sin` 或 `Swish` 这种光滑激活函数。
-* **显存爆炸？**
-    * **原因**：`create_graph=True` 会保存计算图，非常吃显存。
-    * **解决**：确保只在需要求高阶导数的地方开这个选项。
+    def compute_pde_residual(self, x, t):
+        """
+        计算 PDE 的残差。
+        注意：x, t 必须是 requires_grad=True 的张量
+        """
+        # 1. 前向传播得到预测值 u
+        # 拼接 x 和 t 作为网络输入
+        u = self.model(torch.cat([x, t], dim=1))
+        
+        # 2. 利用自动微分计算导数
+        # du/dt
+        u_t = torch.autograd.grad(u, t, torch.ones_like(u), create_graph=True)[0]
+        # du/dx
+        u_x = torch.autograd.grad(u, x, torch.ones_like(u), create_graph=True)[0]
+        # d^2u/dx^2 (需要对 u_x 再次求导)
+        u_xx = torch.autograd.grad(u_x, x, torch.ones_like(u_x), create_graph=True)[0]
+        
+        # 3. 构造 PDE 残差 (Burgers' Eq)
+        # f = u_t + u*u_x - nu*u_xx
+        f = u_t + u * u_x - self.nu * u_xx
+        
+        return f
+
+    def total_loss(self, x_data, t_data, u_data, x_collocation, t_collocation):
+        """
+        x_data, t_data, u_data: 有标签的观测数据 (用于 Data Loss)
+        x_collocation, t_collocation: 随机采样的配点 (用于 PDE Loss)
+        """
+        
+        # --- Part 1: Data Loss (监督学习) ---
+        u_pred_data = self.model(torch.cat([x_data, t_data], dim=1))
+        loss_data = self.loss_fn(u_pred_data, u_data)
+        
+        # --- Part 2: PDE Loss (物理约束) ---
+        # 确保配点开启梯度追踪
+        x_collocation.requires_grad = True
+        t_collocation.requires_grad = True
+        
+        # 计算残差
+        f_pred = self.compute_pde_residual(x_collocation, t_collocation)
+        
+        # 我们希望残差趋近于 0
+        target_zeros = torch.zeros_like(f_pred)
+        loss_physics = self.loss_fn(f_pred, target_zeros)
+        
+        # --- Total Loss ---
+        # 这里的权重 1.0 可以根据训练情况调整
+        loss = loss_data + loss_physics
+        
+        return loss, loss_data, loss_physics
